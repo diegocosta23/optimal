@@ -226,7 +226,16 @@ class MainWindow(QMainWindow):
             self.company_selected.emit(company)
 
     def set_company_text(self, text: str) -> None:
-        self.company_input.setCurrentText(text)
+        line_edit = self.company_input.lineEdit()
+        if line_edit is None:
+            self.company_input.setCurrentText(text)
+            return
+
+        previous = line_edit.blockSignals(True)
+        try:
+            self.company_input.setCurrentText(text)
+        finally:
+            line_edit.blockSignals(previous)
 
     def current_company_text(self) -> str:
         return self.company_input.currentText().strip()
