@@ -1,180 +1,143 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import Page
 
 from src.optimal.tradingview.browser import BrowserManager
-from src.optimal.tradingview.selectors import TradingViewSelectors
+
+SEARCH_BUTTON_NAME: Final[str] = "Search"
+SEARCHBOX_NAME: Final[str] = "Symbol, ISIN, or CUSIP"
 
 
 @dataclass(slots=True)
 class SearchResult:
-    """Ett sökresultat från TradingView."""
+    """Ett TradingView-resultat från symbol-sökningen."""
 
     name: str
     raw_text: str = ""
 
 
 class SearchManager:
-    """Hanterar företagssökningen i TradingView."""
+    """Hanterar företagssökning i TradingView Superchart."""
 
     def __init__(self, browser: BrowserManager) -> None:
         self.browser = browser
-        self.selectors = TradingViewSelectors()
         self.page: Page | None = None
 
-    def refresh_page(self) -> Page:
+    def refresh(self) -> Page:
         """Hämta aktuell TradingView-sida från BrowserManager."""
 
         self.page = self.browser.get_page()
         return self.page
 
-    def _require_page(self) -> Page:
-        if self.page is None:
-            return self.refresh_page()
-        return self.page
-
-    def _search_button(self) -> Locator | None:
-        page = self._require_page()
-        return self.selectors.first_visible(page, self.selectors.search_button_selectors)
-
-    def _search_input(self) -> Locator:
-        page = self._require_page()
-        locator = self.selectors.first_visible(page, self.selectors.search_input_selectors)
-        if locator is None:
-            raise RuntimeError("Kunde inte hitta TradingViews sökfält.")
-        return locator
-
     def open_search(self) -> None:
-        """Öppna TradingViews sökdialog eller fokusera befintligt fält."""
+        """Öppna TradingViews sökdialog."""
 
-        page = self.refresh_page()
+        page = self.refresh()
+        page.get_by_role("button", name=SEARCH_BUTTON_NAME).click()
+        page.wait_for_timeout(150)
 
-        button = self._search_button()
-        if button is not None:
-            button.click()
-            page.wait_for_timeout(150)
-            return
-
-        shortcuts = ("Control+K", "Alt+S", "Control+Shift+P")
-        for shortcut in shortcuts:
-            try:
-                page.keyboard.press(shortcut)
-                page.wait_for_timeout(150)
-                if self.selectors.first_visible(page, self.selectors.search_input_selectors):
-                    return
-            except Exception:  # noqa: BLE001
-                continue
-
-        raise RuntimeError("Kunde inte öppna TradingViews sökning.")
-
-    def search_company(self, company: str, wait_ms: int = 350) -> list[SearchResult]:
-        """Skriv ett företagsnamn i TradingView och hämta träffarna."""
+    def search_company(self, company: str) -> list[SearchResult]:
+        """Sök efter ett företagsnamn och returnera synliga träffar."""
 
         query = company.strip()
         if not query:
             return []
 
-        page = self.refresh_page()
+        page = self.refresh()
         self.open_search()
 
-        field = self._search_input()
+        field = page.get_by_role("searchbox", name=SEARCHBOX_NAME)
         field.click()
-        try:
-            field.fill(query)
-        except Exception:  # noqa: BLE001
-            field.press("Control+A")
-            field.type(query, delay=20)
+        field.fill("")
+        field.type(query, delay=25)
 
-        page.wait_for_timeout(wait_ms)
+        page.wait_for_timeout(550)
         return self.read_results()
 
     def read_results(self) -> list[SearchResult]:
-        """Läs alla synliga resultat i TradingViews söklista."""
+        """Läs alla synliga symbol-träffar från TradingView."""
 
-        page = self.refresh_page()
+        page = self.refresh()
+        rows = page.locator("[data-name='symbol-item']")
+
         results: list[SearchResult] = []
         seen: set[str] = set()
 
-        for selector in self.selectors.result_row_selectors:
-            locator = page.locator(selector)
-
+        for index in range(rows.count()):
+            row = rows.nth(index)
             try:
-                count = locator.count()
+                if not row.is_visible():
+                    continue
+                text = row.inner_text().strip()
             except Exception:  # noqa: BLE001
                 continue
 
-            for index in range(count):
-                item = locator.nth(index)
-                try:
-                    if not item.is_visible():
-                        continue
-                    text = item.inner_text().strip()
-                except Exception:  # noqa: BLE001
-                    continue
+            name = self._extract_name(text)
+            if not name:
+                continue
 
-                name = self._normalize_result_name(text)
-                if not name:
-                    continue
+            key = name.casefold()
+            if key in seen:
+                continue
 
-                key = name.casefold()
-                if key in seen:
-                    continue
-
-                seen.add(key)
-                results.append(SearchResult(name=name, raw_text=text))
+            seen.add(key)
+            results.append(SearchResult(name=name, raw_text=text))
 
         return results
 
     def select_result(self, company: str) -> None:
-        """Klicka på ett specifikt resultat i TradingView."""
+        """Klicka på ett valt företag i resultatlistan."""
 
-        target = self._normalize_result_name(company).casefold()
-        if not target:
+        self.select_company(company)
+
+    def select_company(self, company: str) -> None:
+        """Klicka på ett valt företag i resultatlistan."""
+
+        query = company.strip()
+        if not query:
             raise RuntimeError("Tomt företagsnamn kunde inte väljas.")
 
-        page = self.refresh_page()
+        page = self.refresh()
 
-        for selector in self.selectors.result_row_selectors:
-            locator = page.locator(selector)
+        try:
+            page.get_by_text(query, exact=False).first.click()
+            page.wait_for_timeout(250)
+            return
+        except Exception:  # noqa: BLE001
+            pass
 
+        rows = page.locator("[data-name='symbol-item']")
+        target = query.casefold()
+
+        for index in range(rows.count()):
+            row = rows.nth(index)
             try:
-                count = locator.count()
+                if not row.is_visible():
+                    continue
+                text = row.inner_text().strip()
             except Exception:  # noqa: BLE001
                 continue
 
-            for index in range(count):
-                item = locator.nth(index)
-                try:
-                    if not item.is_visible():
-                        continue
-                    text = item.inner_text().strip()
-                except Exception:  # noqa: BLE001
-                    continue
+            name = self._extract_name(text)
+            if not name:
+                continue
 
-                name = self._normalize_result_name(text).casefold()
-                if not name:
-                    continue
+            normalized = name.casefold()
+            if target in normalized or normalized in target:
+                row.click()
+                page.wait_for_timeout(250)
+                return
 
-                if target in name or name in target:
-                    item.click()
-                    page.wait_for_timeout(250)
-                    return
+        raise RuntimeError(f"Kunde inte välja resultatet: {company}")
 
-        try:
-            page.get_by_text(company, exact=False).first.click()
-            page.wait_for_timeout(250)
-            return
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"Kunde inte välja resultatet: {company}") from exc
-
-    def _normalize_result_name(self, text: str) -> str:
-        """Gör TradingView-text mer användbar som visningsnamn."""
+    def _extract_name(self, text: str) -> str:
+        """Extrahera ett visningsnamn från TradingViews råtext."""
 
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             return ""
 
-        first_line = lines[0]
-        return " ".join(first_line.split())
+        return " ".join(lines[0].split())
