@@ -7,7 +7,6 @@ class BrowserManager:
     """Hantera anslutningen till användarens redan öppna Chrome via CDP."""
 
     CDP_URL = "http://127.0.0.1:9222"
-    SUPERCHART_URL = "https://www.tradingview.com/chart/CZ8FDi5t/"
     SUPERCHART_PREFIX = "https://www.tradingview.com/chart/"
 
     def __init__(self) -> None:
@@ -17,7 +16,7 @@ class BrowserManager:
         self.page: Page | None = None
 
     def connect(self) -> Page:
-        """Anslut till Chrome via CDP och returnera TradingView Superchart."""
+        """Anslut till Chrome via CDP och returnera en redan öppen TradingView-tab."""
 
         if self.page is not None:
             return self.page
@@ -30,20 +29,14 @@ class BrowserManager:
             self.close()
             raise RuntimeError(
                 "Kunde inte ansluta till Chrome via CDP. Starta din vanliga Chrome "
-                "med --remote-debugging-port=9222 och öppna sedan din inloggade "
-                "TradingView Superchart där."
+                "med --remote-debugging-port=9222 och öppna TradingView i den chrome-instansen."
             ) from exc
 
-        if not self.browser.contexts:
-            self.close()
-            raise RuntimeError("Ingen Chrome-kontext hittades.")
-
-        self.context = self.browser.contexts[0]
-        self.page = self.ensure_superchart()
+        self.page = self.find_superchart()
         return self.page
 
     def is_connected(self) -> bool:
-        return self.playwright is not None and self.browser is not None and self.context is not None
+        return self.playwright is not None and self.browser is not None and self.context is not None and self.page is not None
 
     def get_page(self) -> Page:
         """Returnera en aktiv TradingView-sida."""
@@ -54,39 +47,22 @@ class BrowserManager:
         return self.page
 
     def find_superchart(self) -> Page:
-        """Hitta en redan öppen TradingView Superchart-flik."""
+        """Hitta en redan öppen TradingView Superchart-flik i alla tillgängliga kontexter."""
 
-        if self.context is None:
+        if self.browser is None:
             raise RuntimeError("Chrome är inte ansluten.")
 
-        for page in self.context.pages:
-            if page.url.startswith(self.SUPERCHART_PREFIX):
-                self.page = page
-                return page
+        for context in self.browser.contexts:
+            for page in context.pages:
+                if page.url.startswith(self.SUPERCHART_PREFIX):
+                    self.context = context
+                    self.page = page
+                    return page
 
-        raise RuntimeError("Ingen TradingView Superchart hittades.")
-
-    def ensure_superchart(self) -> Page:
-        """Hitta Superchart eller öppna den fasta chart-URL:en."""
-
-        if self.context is None:
-            raise RuntimeError("Chrome är inte ansluten.")
-
-        try:
-            page = self.find_superchart()
-        except RuntimeError:
-            page = self.context.new_page()
-            page.goto(self.SUPERCHART_URL, wait_until="domcontentloaded")
-            self.page = page
-            return page
-
-        try:
-            page.wait_for_load_state("domcontentloaded")
-        except Exception:  # noqa: BLE001
-            pass
-
-        self.page = page
-        return page
+        raise RuntimeError(
+            "Ingen TradingView Superchart hittades i den öppna Chrome-instansen. "
+            "Öppna TradingView-sidan först och försök igen."
+        )
 
     def close(self) -> None:
         """Stäng Playwright-anslutningen om den finns."""
