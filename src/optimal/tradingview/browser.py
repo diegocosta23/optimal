@@ -12,6 +12,7 @@ class BrowserManager:
     """Hantera anslutningen till användarens redan öppna Chrome via CDP."""
 
     CDP_URL: Final[str] = "http://127.0.0.1:9222"
+    SUPERCHART_URL: Final[str] = "https://www.tradingview.com/chart/CZ8FDi5t/"
     SUPERCHART_PREFIX: Final[str] = "https://www.tradingview.com/chart/"
     CDP_READY_TIMEOUT_SECONDS: Final[float] = 15.0
 
@@ -70,12 +71,14 @@ class BrowserManager:
                     self.page = page
                     return page
 
-        pages = self.describe_pages()
-        detail = "\n".join(pages) if pages else "(inga öppna sidor hittades)"
-        raise RuntimeError(
-            "Ingen TradingView Superchart hittades i den öppna Chrome-instansen. "
-            "Öppna TradingView-sidan först och försök igen.\n\n" + detail
-        )
+        if not self.browser.contexts:
+            raise RuntimeError("Ingen Chrome-kontext hittades.")
+
+        self.context = self.browser.contexts[0]
+        page = self.context.new_page()
+        page.goto(self.SUPERCHART_URL, wait_until="domcontentloaded")
+        self.page = page
+        return page
 
     def describe_pages(self) -> list[str]:
         """Beskriv alla öppna sidor för felsökning."""
